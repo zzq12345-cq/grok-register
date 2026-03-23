@@ -1,0 +1,29 @@
+name = "grok-art-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+# Static assets (frontend UI)
+assets = { directory = "./static", binding = "ASSETS" }
+
+# Smart placement for optimal performance
+[placement]
+mode = "smart"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "grok-imagine"
+database_id = "a50cc32b-faae-4d4e-ac0d-f8f96480a5a5"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "KV_CACHE"
+id = "e6ff27dfe4a14b16a7088601909e7110"
+
+[vars]
+BUILD_SHA = "dev"
+KV_CACHE_MAX_BYTES = "26214400"
+VIDEO_POSTER_PREVIEW = "true"
+
+# Authentication - set via Cloudflare Dashboard or wrangler secret:
+#   npx wrangler secret put AUTH_USERNAME
+#   npx wrangler secret put AUTH_PASSWORD

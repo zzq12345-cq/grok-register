@@ -1,0 +1,9 @@
+# Local development environment variables
+# Copy this file to .dev.vars and fill in your values
+
+# Authentication (required)
+AUTH_USERNAME=admin
+AUTH_PASSWORD=your-secure-password
+
+# Optional: Grok credentials for testing
+# GROK_SSO=your-sso-token

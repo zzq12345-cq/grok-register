@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>仙侠绘卷 · Grok 统一面板</title>
+    <meta name="description" content="Grok 注册与 AI 服务统一管理面板">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=ZCOOL+XiaoWei&family=Ma+Shan+Zheng&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- ═══ 顶部横幅 ═══ -->
+    <header>
+        <div class="marquee-container">
+            <div class="marquee-content">
+                仙侠绘卷 ◇ 注册造册 ◇ 灵牌管理 ◇ 符钥管理 ◇ 图灵造像 ◇ 影像合成 ◇
+                仙侠绘卷 ◇ 注册造册 ◇ 灵牌管理 ◇ 符钥管理 ◇ 图灵造像 ◇ 影像合成 ◇
+            </div>
+        </div>
+        <div class="header-row">
+            <h1>仙 侠 绘 卷 <span class="version-tag">v3.0</span></h1>
+            <div class="header-status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">就绪</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ═══ 主容器 ═══ -->
+    <div class="container">
+        <!-- Tab 导航 -->
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="register">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                注册造册
+            </button>
+            <button class="tab-btn" data-tab="tokens">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+                灵牌管理
+            </button>
+            <button class="tab-btn" data-tab="apikeys">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                符钥管理
+            </button>
+            <button class="tab-btn" data-tab="imagine">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                图灵造像
+            </button>
+            <button class="tab-btn" data-tab="video">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                影像合成
+            </button>
+            <button class="tab-btn" data-tab="logs">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+                仙迹日志
+            </button>
+        </nav>
+
+        <!-- ═══ Tab 1: 注册造册 ═══ -->
+        <section id="panel-register" class="panel active">
+            <!-- 统计卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-total">0</div>
+                    <div class="stat-label">总任务</div>
+                </div>
+                <div class="stat-card stat-success">
+                    <div class="stat-value" id="stat-success">0</div>
+                    <div class="stat-label">成功</div>
+                </div>
+                <div class="stat-card stat-danger">
+                    <div class="stat-value" id="stat-fail">0</div>
+                    <div class="stat-label">失败</div>
+                </div>
+                <div class="stat-card stat-info">
+                    <div class="stat-value" id="stat-rate">0%</div>
+                    <div class="stat-label">成功率</div>
+                </div>
+            </div>
+
+            <!-- 任务设置 -->
+            <div class="section">
+                <h2>任务设置</h2>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>线程数</label>
+                        <div class="input-with-slider">
+                            <input type="range" id="threadSlider" min="1" max="10" value="1">
+                            <input type="number" id="threadCount" min="1" max="10" value="1">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>每线程任务数</label>
+                        <input type="number" id="taskCount" min="1" max="100" value="1">
+                    </div>
+                    <div class="form-group">
+                        <label>浏览器模式</label>
+                        <select id="headlessMode">
+                            <option value="false">有头模式（推荐）</option>
+                            <option value="true">无头模式</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>邮箱域名</label>
+                        <select id="emailDomain">
+                            <option value="">随机选择</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="button-row">
+                    <button class="btn" id="btn-start-register">开始注册</button>
+                    <button class="btn btn-secondary" id="btn-stop-register" disabled>停止任务</button>
+                </div>
+            </div>
+
+            <!-- 线程进度 -->
+            <div class="section">
+                <h2>线程进度</h2>
+                <div id="thread-progress" class="thread-list">
+                    <div class="empty-state">尚未启动任务</div>
+                </div>
+            </div>
+
+            <!-- 运行日志 -->
+            <div class="section">
+                <div class="section-header">
+                    <h2>运行日志</h2>
+                    <button class="btn btn-sm btn-secondary" id="btn-clear-log">清空</button>
+                </div>
+                <div id="register-log" class="log-container"></div>
+            </div>
+
+            <!-- 注册结果 -->
+            <div class="section">
+                <div class="section-header">
+                    <h2>注册结果</h2>
+                    <span class="result-count" id="result-count">共 0 条</span>
+                    <button class="btn btn-sm" id="btn-import-last">📥 导入最新</button>
+                    <button class="btn btn-sm btn-secondary" id="btn-clear-log">清空</button>
+                </div>
+                <div id="register-results" class="result-list">
+                    <div class="empty-state">暂无结果</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Tab 2: 灵牌管理 ═══ -->
+        <section id="panel-tokens" class="panel">
+            <!-- 统计 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="token-stat-total">0</div>
+                    <div class="stat-label">令牌总数</div>
+                </div>
+                <div class="stat-card stat-success">
+                    <div class="stat-value" id="token-stat-active">0</div>
+                    <div class="stat-label">活跃数量</div>
+                </div>
+            </div>
+
+            <!-- 批量操作 -->
+            <div class="section">
+                <h2>批量法术</h2>
+                <div class="form-group">
+                    <label>导入令牌 (SSO 或 JSON 格式)</label>
+                    <textarea id="input-tokens" placeholder="在此粘贴令牌..."></textarea>
+                </div>
+                <div class="button-row">
+                    <button class="btn" id="btn-import-tokens">导入数据</button>
+                    <button class="btn btn-secondary" id="btn-nsfw-all">批量启用 NSFW</button>
+                    <button class="btn btn-danger" id="btn-clear-tokens">清空全部</button>
+                    <button class="btn btn-secondary" id="btn-export-tokens">导出令牌</button>
+                </div>
+                <div id="nsfw-progress" class="progress-container">
+                    <div class="progress-fill"></div>
+                </div>
+                <div id="nsfw-log" class="log-container" style="display:none;"></div>
+            </div>
+
+            <div class="section">
+                <h2>灵牌诊脉</h2>
+                <p style="margin-bottom:20px; color:var(--text-muted);">检查图片接口是否可用，并区分限流、鉴权失效、握手失败与上游拦截。</p>
+                <div class="button-row" style="align-items:center;">
+                    <button class="btn btn-secondary" id="btn-diagnose-all">诊断全部活跃令牌</button>
+                    <span id="diagnose-summary" class="diagnose-summary">尚未执行诊断</span>
+                </div>
+                <div id="diagnose-progress" class="progress-container">
+                    <div class="progress-fill"></div>
+                </div>
+                <div id="diagnose-log" class="log-container" style="display:none;"></div>
+            </div>
+
+            <!-- 令牌列表 -->
+            <div class="section">
+                <h2>灵牌名录</h2>
+                <div id="token-list" class="token-list">
+                    <div class="empty-state">暂无令牌，请先导入</div>
+                </div>
+                <div id="token-pagination" class="pagination"></div>
+            </div>
+        </section>
+
+        <!-- ═══ Tab 3: 符钥管理 ═══ -->
+        <section id="panel-apikeys" class="panel">
+            <!-- 统计 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="apikey-stat-total">0</div>
+                    <div class="stat-label">密钥总数</div>
+                </div>
+                <div class="stat-card stat-success">
+                    <div class="stat-value" id="apikey-stat-enabled">0</div>
+                    <div class="stat-label">已启用</div>
+                </div>
+            </div>
+
+            <!-- 创建密钥 -->
+            <div class="section">
+                <h2>创建密钥</h2>
+                <div class="form-row">
+                    <div class="form-group" style="flex: 2;">
+                        <label>密钥名称 (可选)</label>
+                        <input type="text" id="apikey-name" placeholder="例如: 测试环境、生产服务器...">
+                    </div>
+                    <div class="form-group" style="flex: 0 0 auto; display: flex; align-items: flex-end;">
+                        <button class="btn" id="btn-create-apikey">创建密钥</button>
+                    </div>
+                </div>
+                <div id="new-apikey-display" class="new-key-display" style="display:none;">
+                    <div class="new-key-warning">⚠️ 请立即保存此密钥，关闭后将无法再次查看完整密钥！</div>
+                    <div class="new-key-value" id="new-apikey-value"></div>
+                    <button class="btn btn-secondary" id="btn-copy-apikey">复制密钥</button>
+                </div>
+            </div>
+
+            <!-- 密钥列表 -->
+            <div class="section">
+                <h2>密钥列表</h2>
+                <div id="apikey-list" class="token-list">
+                    <div class="empty-state">暂无密钥</div>
+                </div>
+            </div>
+
+            <!-- API 使用说明 -->
+            <div class="section">
+                <h2>API 使用说明</h2>
+                <div class="api-docs">
+                    <h3>图片生成</h3>
+                    <pre><code>POST /v1/images/generations
+Authorization: Bearer sk-xxxxxxxx
+Content-Type: application/json
+
+{
+  "prompt": "a cute cat",
+  "size": "1024x1024",
+  "n": 1
+}</code></pre>
+                    <h3>视频生成</h3>
+                    <pre><code>POST /v1/videos/generations
+Authorization: Bearer sk-xxxxxxxx
+Content-Type: application/json
+
+{
+  "image_url": "https://...",
+  "prompt": "camera pan left",
+  "duration": 6
+}</code></pre>
+                    <h3>支持的尺寸</h3>
+                    <ul>
+                        <li><code>1024x1024</code> - 1:1 (正方形)</li>
+                        <li><code>1024x1536</code> - 2:3 (竖版)</li>
+                        <li><code>1536x1024</code> - 3:2 (横版)</li>
+                        <li><code>1792x1024</code> - 16:9 (宽屏)</li>
+                        <li><code>1024x1792</code> - 9:16 (手机)</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Tab 4: 图灵造像 ═══ -->
+        <section id="panel-imagine" class="panel">
+            <div class="section">
+                <h2>参数设置</h2>
+                <div class="form-row">
+                    <div class="form-group" style="flex: 2;">
+                        <label>提示词</label>
+                        <input type="text" id="image-prompt" placeholder="描述你想要的图片...">
+                    </div>
+                    <div class="form-group">
+                        <label>数量</label>
+                        <input type="number" id="image-count" value="10" min="1" max="50">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>造像规制 (宽高比)</label>
+                        <select id="image-aspect">
+                            <option value="2:3">2:3 (竖版)</option>
+                            <option value="3:2">3:2 (横版)</option>
+                            <option value="1:1">1:1 (正方形)</option>
+                            <option value="16:9">16:9 (宽屏)</option>
+                            <option value="9:16">9:16 (手机)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>天道禁咒 (内容过滤)</label>
+                        <select id="image-nsfw">
+                            <option value="true">允许 NSFW</option>
+                            <option value="false">安全模式</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-full" id="btn-generate-images">开始造像</button>
+                <div id="image-progress" class="progress-container">
+                    <div class="progress-fill"></div>
+                </div>
+                <div id="image-status" class="status-text"></div>
+            </div>
+
+            <div class="section">
+                <h2>造化玉牒 (输出结果)</h2>
+                <div id="image-log" class="log-container" style="height: 100px;"></div>
+                <div id="image-grid" class="image-grid">
+                    <div class="empty-state">暂无图片</div>
+                </div>
+                <div style="text-align: center; margin-top: 24px;">
+                    <button class="btn btn-secondary" id="btn-load-more" style="display: none;">加载更多</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Tab 5: 影像合成 ═══ -->
+        <section id="panel-video" class="panel">
+            <div class="section">
+                <h2>视频合成</h2>
+                <p class="hint-text">请先从「图灵造像」页面选择一张图片</p>
+
+                <input type="hidden" id="video-url">
+                <input type="hidden" id="video-post-id">
+
+                <div id="video-preview" class="preview-card" style="display: none;">
+                    <img id="video-preview-img" src="" alt="预览图">
+                    <div class="preview-info">
+                        <h3>已选图片</h3>
+                        <p id="video-preview-prompt"></p>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group" style="flex: 2;">
+                        <label>动作提示词</label>
+                        <textarea id="video-prompt" placeholder="描述动作效果 (如: 镜头平移、眨眼、行走)"></textarea>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>时长</label>
+                        <select id="video-duration">
+                            <option value="6">6 秒</option>
+                            <option value="10">10 秒</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>分辨率</label>
+                        <select id="video-resolution">
+                            <option value="480p">480p (快速)</option>
+                            <option value="720p">720p (高清)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>模式</label>
+                        <select id="video-mode">
+                            <option value="custom">标准模式</option>
+                            <option value="extremely-crazy">疯狂模式</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button class="btn" id="btn-generate-video">生成视频</button>
+                <div id="video-progress" class="progress-container">
+                    <div class="progress-fill"></div>
+                </div>
+                <div id="video-result" class="video-result"></div>
+                <div id="video-log" class="log-container"></div>
+            </div>
+        </section>
+
+        <!-- ═══ Tab 6: 仙迹日志 ═══ -->
+        <section id="panel-logs" class="panel">
+            <!-- 统计卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="log-stat-total">0</div>
+                    <div class="stat-label">总请求</div>
+                </div>
+                <div class="stat-card stat-success">
+                    <div class="stat-value" id="log-stat-success">0</div>
+                    <div class="stat-label">成功</div>
+                </div>
+                <div class="stat-card stat-danger">
+                    <div class="stat-value" id="log-stat-error">0</div>
+                    <div class="stat-label">失败</div>
+                </div>
+                <div class="stat-card stat-info">
+                    <div class="stat-value" id="log-stat-today">0</div>
+                    <div class="stat-label">今日</div>
+                </div>
+            </div>
+
+            <!-- 筛选器 -->
+            <div class="section">
+                <h2>筛选条件</h2>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>操作类型</label>
+                        <select id="log-filter-action">
+                            <option value="">全部</option>
+                            <option value="imagine">图片生成</option>
+                            <option value="video">视频生成</option>
+                            <option value="chat">Chat 对话</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>状态</label>
+                        <select id="log-filter-status">
+                            <option value="">全部</option>
+                            <option value="success">成功</option>
+                            <option value="error">失败</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;">
+                        <button class="btn btn-sm" id="btn-filter-logs">查询</button>
+                        <button class="btn btn-sm btn-secondary" id="btn-refresh-logs">刷新</button>
+                        <button class="btn btn-sm btn-danger" id="btn-clear-logs">清空</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 日志列表 -->
+            <div class="section">
+                <div class="section-header">
+                    <h2>请求日志</h2>
+                    <span class="result-count" id="log-count">共 0 条</span>
+                </div>
+                <div class="log-table-wrapper">
+                    <table class="log-table" id="log-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>操作</th>
+                                <th>Token</th>
+                                <th>耗时</th>
+                                <th>状态</th>
+                                <th>错误信息</th>
+                            </tr>
+                        </thead>
+                        <tbody id="log-table-body">
+                            <tr><td colspan="6" class="empty-cell">暂无日志</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="log-pagination" class="pagination"></div>
+            </div>
+        </section>
+    </div>
+
+    <!-- ═══ 底部 ═══ -->
+    <footer>
+        <span>仙侠绘卷 · Grok 统一面板 · 白色仙侠风</span>
+    </footer>
+
+    <!-- Workers URL 配置 (由 Flask 注入) -->
+    <script>
+        window.WORKERS_URL = "{{ workers_url }}";
+    </script>
+
+    <!-- 主应用脚本 -->
+    <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Wrangler local state
+.wrangler/
+
+# Environment variables (contains secrets)
+.dev.vars
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build output
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local tools
+.ace-tool/
+
+# Test coverage
+coverage/
