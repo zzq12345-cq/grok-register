@@ -2049,6 +2049,24 @@ def _openai_sse_chunk(resp_id: str, model: str, content: str = "", role: str | N
     }
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
+TOKENS_JSON_FILE = os.path.join(os.path.dirname(__file__), "tokens.json")
+
+
+def _load_tokens_file() -> list[dict]:
+    if not os.path.exists(TOKENS_JSON_FILE):
+        return []
+    try:
+        with open(TOKENS_JSON_FILE, "r") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_tokens_file(tokens: list[dict]):
+    with open(TOKENS_JSON_FILE, "w") as f:
+        json.dump(tokens, f, indent=2, ensure_ascii=False)
+
 
 def _extract_openai_messages(messages: list[dict]) -> str:
     """将 OpenAI messages 格式转成单个文本"""
@@ -2185,7 +2203,7 @@ def api_import_tokens():
     if not incoming:
         return jsonify({"success": False, "error": "No tokens provided"}), 400
 
-    existing = _load_full_tokens()
+    existing = _load_tokens_file()
     existing_emails = {t.get("email", "").lower() for t in existing if t.get("email")}
 
     added = 0
@@ -2196,7 +2214,7 @@ def api_import_tokens():
             existing_emails.add(email)
             added += 1
 
-    _save_tokens(existing)
+    _save_tokens_file(existing)
     return jsonify({"success": True, "added": added, "total": len(existing)})
 
 
