@@ -34,6 +34,14 @@ export async function initTokens() {
   document.getElementById('btn-export-tokens').onclick = exportTokens;
   document.getElementById('btn-diagnose-all').onclick = diagnoseAllTokens;
 
+  // 远程同步
+  const syncBtn = document.getElementById('btn-sync-to-remote');
+  const remoteInput = document.getElementById('remote-server-url');
+  if (syncBtn && remoteInput) {
+    remoteInput.value = localStorage.getItem('remote_server_url') || '';
+    syncBtn.onclick = syncToRemote;
+  }
+
   bus.on('refresh-tokens', loadTokens);
   await loadTokens();
 }
@@ -442,5 +450,42 @@ async function diagnoseAllTokens() {
     btn.disabled = false;
     btn.textContent = '诊断全部活跃令牌';
     setTimeout(() => { progress.style.display = 'none'; }, 2000);
+  }
+}
+
+async function syncToRemote() {
+  const remoteInput = document.getElementById('remote-server-url');
+  const resultEl = document.getElementById('sync-result');
+  const btn = document.getElementById('btn-sync-to-remote');
+  const remoteUrl = (remoteInput.value || '').trim();
+
+  if (!remoteUrl) {
+    resultEl.textContent = '❌ 请输入服务器地址';
+    resultEl.style.color = 'var(--danger)';
+    return;
+  }
+
+  localStorage.setItem('remote_server_url', remoteUrl);
+  btn.disabled = true;
+  btn.textContent = '同步中...';
+  resultEl.textContent = '正在推送...';
+  resultEl.style.color = 'var(--text-muted)';
+
+  try {
+    const data = await workersApi('/api/sync-tokens-to-remote', 'POST', { remote_url: remoteUrl });
+    if (data.success) {
+      const remote = data.remote_response || {};
+      resultEl.textContent = `✅ 推送 ${data.sent} 个 → 新增 ${remote.added || 0} 个，服务器总计 ${remote.total || '?'} 个`;
+      resultEl.style.color = 'var(--success)';
+    } else {
+      resultEl.textContent = `❌ ${data.error || '同步失败'}`;
+      resultEl.style.color = 'var(--danger)';
+    }
+  } catch (e) {
+    resultEl.textContent = `❌ ${e.message}`;
+    resultEl.style.color = 'var(--danger)';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⬆️ 同步到服务器';
   }
 }

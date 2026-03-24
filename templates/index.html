@@ -173,6 +173,19 @@
                     <button class="btn btn-danger" id="btn-clear-tokens">清空全部</button>
                     <button class="btn btn-secondary" id="btn-export-tokens">导出令牌</button>
                 </div>
+                <div style="margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-surface);">
+                    <h3 style="margin: 0 0 12px 0; font-size: 14px; color: var(--text-muted);">📡 远程服务器同步</h3>
+                    <div class="form-row" style="align-items: flex-end;">
+                        <div class="form-group" style="flex: 2;">
+                            <label>服务器地址</label>
+                            <input type="text" id="remote-server-url" placeholder="http://70.39.195.121:8086">
+                        </div>
+                        <div class="form-group" style="flex: 0 0 auto;">
+                            <button class="btn" id="btn-sync-to-remote">⬆️ 同步到服务器</button>
+                        </div>
+                    </div>
+                    <div id="sync-result" style="margin-top: 8px; font-size: 13px; color: var(--text-muted);"></div>
+                </div>
                 <div id="nsfw-progress" class="progress-container">
                     <div class="progress-fill"></div>
                 </div>

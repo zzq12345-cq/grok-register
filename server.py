@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 仙侠绘卷 - Grok 统一管理面板
 白色仙侠风主题
@@ -16,7 +17,8 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import UTC, datetime as dt
+from datetime import datetime as dt, timezone
+UTC = timezone.utc
 import hashlib
 from pathlib import Path
 
@@ -471,6 +473,223 @@ _LOCAL_TOKEN_BLOCKS: dict[str, float] = {}
 _LOCAL_TOKEN_BLOCK_LOCK = threading.Lock()
 _RUNTIME_CF_CLEARANCE_CACHE = {"value": "", "expires_at": 0.0}
 _RUNTIME_CF_CLEARANCE_LOCK = threading.Lock()
+
+# ── TLS 指纹伪造直连 (借鉴 grok2api) ─────────────────────────────
+
+GROK_CHAT_API = "https://grok.com/rest/app-chat/conversations/new"
+GROK_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+GROK_TLS_CLIENT_ID = "chrome_131"
+
+
+def _gen_statsig_id() -> str:
+    """生成 Statsig ID（借鉴 grok2api StatsigGenerator）"""
+    import base64
+    rand_str = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=8))
+    if random.choice([True, False]):
+        message = f"e:TypeError: Cannot read properties of null (reading 'children['{rand_str}']')"
+    else:
+        message = f"e:TypeError: Cannot read properties of undefined (reading '{rand_str}')"
+    return base64.b64encode(message.encode()).decode()
+
+
+def _build_grok_cookie(token: dict) -> str:
+    """构建 SSO cookie 字符串"""
+    parts = [f"sso={token.get('sso', '')}"]
+    if token.get("sso_rw"):
+        parts.append(f"sso-rw={token.get('sso_rw', '')}")
+    cf = token.get("cf_clearance", "")
+    if cf and _is_cookie_value_safe(cf):
+        parts.append(f"cf_clearance={cf}")
+    return "; ".join(parts)
+
+
+def _build_grok_headers(token: dict) -> dict:
+    """构建完整的 grok.com API 请求头（借鉴 grok2api build_headers）"""
+    return {
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Baggage": "sentry-environment=production,sentry-release=d6add6fb0460641fd482d767a335ef72b9b6abb8,sentry-public_key=b311e0f2690c81f25e2c4cf6d4f7ce1c",
+        "Content-Type": "application/json",
+        "Cookie": _build_grok_cookie(token),
+        "Origin": "https://grok.com",
+        "Priority": "u=1, i",
+        "Referer": "https://grok.com/",
+        "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not(A:Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "User-Agent": GROK_USER_AGENT,
+        "x-statsig-id": _gen_statsig_id(),
+        "x-xai-request-id": str(uuid.uuid4()),
+    }
+
+
+def _build_grok_chat_payload(prompt: str, count: int, aspect_ratio: str, enable_nsfw: bool) -> dict:
+    """构建 grok chat payload（带 deviceEnvInfo）"""
+    return {
+        "deviceEnvInfo": {
+            "darkModeEnabled": False,
+            "devicePixelRatio": 2,
+            "screenHeight": 1329,
+            "screenWidth": 2056,
+            "viewportHeight": 1083,
+            "viewportWidth": 2056,
+        },
+        "temporary": True,
+        "modelName": "grok-3",
+        "modelMode": "MODEL_MODE_FAST",
+        "message": prompt,
+        "fileAttachments": [],
+        "imageAttachments": [],
+        "disableSearch": False,
+        "enableImageGeneration": True,
+        "returnImageBytes": False,
+        "returnRawGrokInXaiRequest": False,
+        "enableImageStreaming": True,
+        "imageGenerationCount": count,
+        "forceConcise": False,
+        "toolOverrides": {"imageGen": True},
+        "enableSideBySide": True,
+        "sendFinalMetadata": True,
+        "isReasoning": False,
+        "disableTextFollowUps": False,
+        "disableMemory": True,
+        "forceSideBySide": False,
+        "isAsyncChat": False,
+        "disableSelfHarmShortCircuit": False,
+        "responseMetadata": {
+            "requestModelDetails": {"modelId": "grok-3"},
+            "experiments": [],
+            "modelConfigOverride": {
+                "modelMap": {
+                    "imageGenModelConfig": {
+                        "aspectRatio": aspect_ratio,
+                        "enableNsfw": enable_nsfw,
+                        "imageGenerationCount": count,
+                    },
+                },
+            },
+        },
+    }
+
+
+def _extract_images_from_text(text: str, max_count: int = 10) -> list[dict]:
+    """从响应文本中提取图片 URL（支持 streamingImageGenerationResponse）"""
+    normalized = text.replace("\\/", "/")
+
+    # 优先从 streamingImageGenerationResponse 提取 progress=100 的最终图
+    streaming_pattern = re.compile(
+        r'"streamingImageGenerationResponse"\s*:\s*\{[^}]*"imageUrl"\s*:\s*"([^"]+)"[^}]*"progress"\s*:\s*100',
+        re.DOTALL,
+    )
+    streaming_matches = streaming_pattern.findall(normalized)
+
+    # 兜底：正则匹配所有图片 URL
+    abs_matches = ABSOLUTE_IMAGE_URL_PATTERN.findall(normalized)
+    rel_matches = RELATIVE_IMAGINE_URL_PATTERN.findall(normalized)
+
+    seen: set[str] = set()
+    images: list[dict] = []
+
+    # 先处理 streaming 图片（最终图）
+    for raw_url in streaming_matches:
+        url = raw_url.strip()
+        if not url:
+            continue
+        # users/xxx/generated/xxx/image.jpg → https://assets.grok.com/users/xxx/...
+        if not url.startswith("http"):
+            url = f"{ASSETS_BASE}/{url}"
+        if url in seen:
+            continue
+        seen.add(url)
+        images.append({"url": url, "image_url": url})
+        if len(images) >= max_count:
+            return images
+
+    # 再处理常规正则匹配
+    for raw_url in abs_matches + rel_matches:
+        url = raw_url.strip().rstrip("),")
+        if not url:
+            continue
+        if url.startswith("/imagine-public/"):
+            url = f"{IMAGINE_PUBLIC_BASE}{url}"
+        elif url.startswith("/"):
+            url = f"{ASSETS_BASE}{url}"
+        if url in seen:
+            continue
+        seen.add(url)
+        images.append({"url": url, "image_url": url})
+        if len(images) >= max_count:
+            break
+    return images
+
+
+def _tls_generate_images(token: dict, prompt: str, count: int, aspect_ratio: str, enable_nsfw: bool) -> dict:
+    """使用 tls_client TLS 指纹伪造直连 grok.com 生图"""
+    import tls_client
+    from urllib.parse import quote
+
+    session = tls_client.Session(client_identifier=GROK_TLS_CLIENT_ID)
+    headers = _build_grok_headers(token)
+    payload = _build_grok_chat_payload(prompt, count, aspect_ratio, enable_nsfw)
+
+    try:
+        response = session.post(
+            GROK_CHAT_API,
+            headers=headers,
+            json=payload,
+            timeout_seconds=60,
+        )
+    except Exception as exc:
+        return {"images": [], "error": f"Network error: {exc}", "status": 0, "raw": ""}
+    finally:
+        session.close()
+
+    text = response.text or ""
+    images = _extract_images_from_text(text, count)
+
+    # 提取 requestId
+    request_id = ""
+    rid_match = re.search(r'"responseId"\s*:\s*"([^"]+)"', text)
+    if rid_match:
+        request_id = rid_match.group(1)
+
+    token_id = token.get("id", "")
+    for idx, img in enumerate(images):
+        img["prompt"] = prompt
+        img["request_id"] = request_id or f"tls-{idx + 1}"
+        original_url = img["url"]
+        img["original_url"] = original_url
+        # 代理 URL：附带 token_id 确保用正确的 cookie
+        img["url"] = f"/api/image-proxy?url={quote(original_url, safe='')}&tid={quote(token_id, safe='')}"
+        img["image_url"] = img["url"]
+
+    error = ""
+    if response.status_code != 200:
+        error = f"HTTP {response.status_code}: {text[:500]}"
+    elif not images:
+        lower = text.lower()
+        if any(k in lower for k in ["429", "rate limit", "rate_limit", "too many requests"]):
+            error = f"Rate limited: {text[:240]}"
+        elif any(k in lower for k in ["cloudflare", "forbidden", "access denied", "anti-bot", "captcha"]):
+            error = f"Upstream blocked: {text[:240]}"
+        elif any(k in lower for k in ["unauthorized", "invalid token", "sign in", "401"]):
+            error = f"Unauthorized: {text[:240]}"
+        else:
+            error = "No images generated via tls-client"
+
+    return {
+        "ok": response.status_code == 200 and len(images) > 0,
+        "status": response.status_code,
+        "request_id": request_id,
+        "images": images,
+        "error": error,
+        "raw": text[:500],
+    }
+
 
 LOCAL_IMAGE_FETCH_JS = r"""async (input) => {
     const CHAT_API = '/rest/app-chat/conversations/new';
@@ -1149,32 +1368,20 @@ def _sync_token_usage_best_effort(token_id: str):
 
 
 async def _diagnose_tokens_locally(tokens: list[dict], delay_ms: int = 250) -> list[dict]:
-    browser_state = await _open_local_browser("diagnose")
+    """使用 TLS 指纹伪造直连诊断 Token（不再需要浏览器）"""
     results: list[dict] = []
-    try:
-        for index, token in enumerate(tokens):
-            page = None
-            try:
-                page, ready, detail = await _open_grok_token_page(browser_state, token)
-                if not ready:
-                    result = _build_diagnostic_result({"images": [], "error": f"Upstream blocked: {detail}", "raw": detail})
-                else:
-                    result = _build_diagnostic_result(await _collect_images_with_page(page, "diagnostic probe", 1, "1:1", False))
-            except Exception as exc:
-                result = _build_diagnostic_result({"images": [], "error": f"Browser error: {exc}"})
-            finally:
-                if page:
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
-            if result.get("code") == "rate_limited":
-                _block_local_token(token.get("id", ""))
-            results.append(result)
-            if index < len(tokens) - 1 and delay_ms > 0:
-                await asyncio.sleep(delay_ms / 1000)
-    finally:
-        await _close_local_browser(browser_state)
+    for index, token in enumerate(tokens):
+        try:
+            result = _build_diagnostic_result(
+                await asyncio.to_thread(_tls_generate_images, token, "diagnostic probe", 1, "1:1", False)
+            )
+        except Exception as exc:
+            result = _build_diagnostic_result({"images": [], "error": f"TLS client error: {exc}"})
+        if result.get("code") == "rate_limited":
+            _block_local_token(token.get("id", ""))
+        results.append(result)
+        if index < len(tokens) - 1 and delay_ms > 0:
+            await asyncio.sleep(delay_ms / 1000)
     return results
 
 
@@ -1188,7 +1395,7 @@ async def _run_local_imagine_job(body: dict, out_queue: queue.Queue):
     enable_nsfw = bool(body.get("enable_nsfw", True))
     token_id = str(body.get("token_id", "") or "").strip()
 
-    _emit_queue_event(out_queue, "info", {"type": "info", "message": "已切换到有头 Chrome 直连生图"})
+    _emit_queue_event(out_queue, "info", {"type": "info", "message": "已切换到 TLS 指纹直连生图（无需浏览器）"})
     _emit_queue_event(out_queue, "progress", {"type": "progress", "progress": 0, "current": 0, "total": count})
 
     try:
@@ -1208,87 +1415,70 @@ async def _run_local_imagine_job(body: dict, out_queue: queue.Queue):
             _emit_queue_event(out_queue, "error", {"type": "error", "message": "没有可用令牌，请先导入或刷新令牌"})
         return
 
-    browser_state = await _open_local_browser("imagine")
     seen_urls: set[str] = set()
     total_collected = 0
     last_error_message = ""
 
-    try:
-        for candidate_index, token in enumerate(candidates, start=1):
+    for candidate_index, token in enumerate(candidates, start=1):
+        if total_collected >= count:
+            break
+        token_name = token.get("name") or token.get("id") or f"token-{candidate_index}"
+        _emit_queue_event(out_queue, "info", {"type": "info", "message": f"尝试令牌 {candidate_index}/{len(candidates)}：{token_name}"})
+
+        token_used = False
+        while total_collected < count:
+            batch_count = min(LOCAL_MAX_CHAT_BATCH_SIZE, count - total_collected)
+            result = await asyncio.to_thread(_tls_generate_images, token, prompt, batch_count, aspect_ratio, enable_nsfw)
+            images = result.get("images") or []
+            emitted_this_round = 0
+
+            for image in images:
+                url = image.get("url") or image.get("image_url")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                total_collected += 1
+                emitted_this_round += 1
+                token_used = True
+                payload = {"type": "image", "url": url, "image_url": url, "prompt": image.get("prompt") or prompt, "id": image.get("request_id") or f"tls-{total_collected}"}
+                _emit_queue_event(out_queue, "image", payload)
+                _emit_queue_event(out_queue, "progress", {"type": "progress", "progress": round(total_collected / count * 100, 1), "current": total_collected, "total": count})
+                if total_collected >= count:
+                    break
+
             if total_collected >= count:
                 break
-            token_name = token.get("name") or token.get("id") or f"token-{candidate_index}"
-            _emit_queue_event(out_queue, "info", {"type": "info", "message": f"尝试令牌 {candidate_index}/{len(candidates)}：{token_name}"})
 
-            page = None
-            token_used = False
-            try:
-                page, ready, detail = await _open_grok_token_page(browser_state, token)
-                if not ready:
-                    last_error_message = f"Upstream blocked: {detail}"
-                    _emit_queue_event(out_queue, "info", {"type": "info", "message": f"{token_name} 被拦截，切换下一个令牌"})
-                    continue
+            error = str(result.get("error", "") or "").strip()
+            if error:
+                last_error_message = error
+                classified = _classify_rest_error(error)
+                if classified["code"] == "rate_limited":
+                    _block_local_token(token.get("id", ""))
+                    _emit_queue_event(out_queue, "info", {"type": "info", "message": f"Token rate limited, switching to another (attempt {candidate_index}/{len(candidates)}) [{error[:120]}]"})
+                elif emitted_this_round == 0:
+                    _emit_queue_event(out_queue, "info", {"type": "info", "message": f"{token_name}: {classified['message']}"})
+                break
 
-                while total_collected < count:
-                    batch_count = min(LOCAL_MAX_CHAT_BATCH_SIZE, count - total_collected)
-                    result = await _collect_images_with_page(page, prompt, batch_count, aspect_ratio, enable_nsfw)
-                    images = result.get("images") or []
-                    emitted_this_round = 0
+            if emitted_this_round == 0:
+                last_error_message = result.get("raw", "")[:200] or "No images generated via tls-client"
+                _emit_queue_event(out_queue, "info", {"type": "info", "message": f"{token_name}: 未返回图片，切换下一个令牌"})
+                break
 
-                    for image in images:
-                        url = image.get("url") or image.get("image_url")
-                        if not url or url in seen_urls:
-                            continue
-                        seen_urls.add(url)
-                        total_collected += 1
-                        emitted_this_round += 1
-                        token_used = True
-                        payload = {"type": "image", "url": url, "image_url": url, "prompt": image.get("prompt") or prompt, "id": image.get("request_id") or f"local-{total_collected}"}
-                        _emit_queue_event(out_queue, "image", payload)
-                        _emit_queue_event(out_queue, "progress", {"type": "progress", "progress": round(total_collected / count * 100, 1), "current": total_collected, "total": count})
-                        if total_collected >= count:
-                            break
+            if emitted_this_round < batch_count:
+                _emit_queue_event(out_queue, "info", {"type": "info", "message": f"{token_name}: 本轮仅返回 {emitted_this_round}/{batch_count} 张，切换下一个令牌"})
+                break
 
-                    if total_collected >= count:
-                        break
+        if token_used:
+            _sync_token_usage_best_effort(token.get("id", ""))
 
-                    error = str(result.get("error", "") or "").strip()
-                    if error:
-                        last_error_message = error
-                        classified = _classify_rest_error(error)
-                        if classified["code"] == "rate_limited":
-                            _block_local_token(token.get("id", ""))
-                            _emit_queue_event(out_queue, "info", {"type": "info", "message": f"Token rate limited, switching to another (attempt {candidate_index}/{len(candidates)}) [{error[:120]}]"})
-                        elif emitted_this_round == 0:
-                            _emit_queue_event(out_queue, "info", {"type": "info", "message": f"{token_name}: {classified['message']}"})
-                        break
+    if total_collected > 0:
+        _emit_queue_event(out_queue, "info", {"type": "info", "message": f"本次共返回 {total_collected}/{count} 张图片"})
+        _emit_queue_event(out_queue, "done", {"type": "done"})
+        return
 
-                    if emitted_this_round == 0:
-                        last_error_message = result.get("raw", "")[:200] or "No images generated via app-chat"
-                        _emit_queue_event(out_queue, "info", {"type": "info", "message": f"{token_name}: 未返回图片，切换下一个令牌"})
-                        break
-
-                    if emitted_this_round < batch_count:
-                        _emit_queue_event(out_queue, "info", {"type": "info", "message": f"{token_name}: 本轮仅返回 {emitted_this_round}/{batch_count} 张，切换下一个令牌"})
-                        break
-            finally:
-                if token_used:
-                    _sync_token_usage_best_effort(token.get("id", ""))
-                if page:
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
-
-        if total_collected > 0:
-            _emit_queue_event(out_queue, "info", {"type": "info", "message": f"本次共返回 {total_collected}/{count} 张图片"})
-            _emit_queue_event(out_queue, "done", {"type": "done"})
-            return
-
-        final_message = last_error_message or (f"All tokens rate limited (tried {len(candidates)} tokens)" if candidates else "没有可用令牌")
-        _emit_queue_event(out_queue, "error", {"type": "error", "message": final_message})
-    finally:
-        await _close_local_browser(browser_state)
+    final_message = last_error_message or (f"All tokens rate limited (tried {len(candidates)} tokens)" if candidates else "没有可用令牌")
+    _emit_queue_event(out_queue, "error", {"type": "error", "message": final_message})
 
 @app.route("/api/tokens", methods=["GET", "POST", "DELETE"])
 def proxy_tokens():
@@ -1776,6 +1966,535 @@ def proxy_apikey_toggle(key_id):
             )
             return Response(resp.content, status=resp.status_code)
     return Response(resp.content, status=resp.status_code)
+
+
+# ── OpenAI 兼容 API (/v1/chat/completions) ──────────────────────
+
+API_KEYS_FILE = os.path.join(os.path.dirname(__file__), "api_keys.json")
+
+GROK_MODEL_MAP = {
+    # Grok 3 系列
+    "grok-3":             {"grokModel": "grok-3",                     "modelMode": "MODEL_MODE_AUTO"},
+    "grok-3-fast":        {"grokModel": "grok-3",                     "modelMode": "MODEL_MODE_FAST"},
+    # Grok 4 系列
+    "grok-4":             {"grokModel": "grok-4",                     "modelMode": "MODEL_MODE_AUTO"},
+    "grok-4-mini":        {"grokModel": "grok-4-mini-thinking-tahoe", "modelMode": "MODEL_MODE_GROK_4_MINI_THINKING"},
+    "grok-4-fast":        {"grokModel": "grok-4",                     "modelMode": "MODEL_MODE_FAST"},
+    "grok-4-heavy":       {"grokModel": "grok-4",                     "modelMode": "MODEL_MODE_HEAVY"},
+    # Grok 4.1 系列
+    "grok-4.1":           {"grokModel": "grok-4-1-thinking-1129",     "modelMode": "MODEL_MODE_AUTO"},
+    "grok-4.1-fast":      {"grokModel": "grok-4-1-thinking-1129",     "modelMode": "MODEL_MODE_FAST"},
+    "grok-4.1-expert":    {"grokModel": "grok-4-1-thinking-1129",     "modelMode": "MODEL_MODE_EXPERT"},
+    "grok-4.1-thinking":  {"grokModel": "grok-4-1-thinking-1129",     "modelMode": "MODEL_MODE_GROK_4_1_THINKING"},
+    # Image 模型（各种宽高比）
+    "grok-image":         {"grokModel": "grok-3", "modelMode": "MODEL_MODE_FAST", "type": "image", "ratio": "1:1"},
+    "grok-image-1_1":     {"grokModel": "grok-3", "modelMode": "MODEL_MODE_FAST", "type": "image", "ratio": "1:1"},
+    "grok-image-2_3":     {"grokModel": "grok-3", "modelMode": "MODEL_MODE_FAST", "type": "image", "ratio": "2:3"},
+    "grok-image-3_2":     {"grokModel": "grok-3", "modelMode": "MODEL_MODE_FAST", "type": "image", "ratio": "3:2"},
+    "grok-image-16_9":    {"grokModel": "grok-3", "modelMode": "MODEL_MODE_FAST", "type": "image", "ratio": "16:9"},
+    "grok-image-9_16":    {"grokModel": "grok-3", "modelMode": "MODEL_MODE_FAST", "type": "image", "ratio": "9:16"},
+    # 兼容别名
+    "grok-3-mini":        {"grokModel": "grok-3",                     "modelMode": "MODEL_MODE_FAST"},
+    "grok-2":             {"grokModel": "grok-3",                     "modelMode": "MODEL_MODE_FAST"},
+}
+
+
+def _load_api_keys() -> list[dict]:
+    if not os.path.exists(API_KEYS_FILE):
+        return []
+    try:
+        with open(API_KEYS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_api_keys(keys: list[dict]):
+    with open(API_KEYS_FILE, "w") as f:
+        json.dump(keys, f, indent=2, ensure_ascii=False)
+
+
+def _validate_bearer(req) -> dict | None:
+    """从 Authorization: Bearer <key> 验证 API Key，返回 key 信息或 None"""
+    auth = req.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[7:].strip()
+    if not token:
+        return None
+    keys = _load_api_keys()
+    for k in keys:
+        if k.get("key") == token and k.get("enabled", True):
+            return k
+    return None
+
+
+def _openai_error(message: str, status: int, code: str = ""):
+    return jsonify({"error": {"message": message, "type": "invalid_request_error" if status < 500 else "server_error", "code": code or None}}), status
+
+
+def _openai_sse_chunk(resp_id: str, model: str, content: str = "", role: str | None = None, finish_reason: str | None = None) -> str:
+    delta = {}
+    if role:
+        delta["role"] = role
+        delta["content"] = ""
+    elif content:
+        delta["content"] = content
+    chunk = {
+        "id": resp_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "logprobs": None, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+
+def _extract_openai_messages(messages: list[dict]) -> str:
+    """将 OpenAI messages 格式转成单个文本"""
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            text_parts = [item.get("text", "") for item in content if item.get("type") == "text"]
+            content = "\n".join(text_parts)
+        if not content:
+            continue
+        if role == "system":
+            parts.append(f"[System]: {content}")
+        elif role == "assistant":
+            parts.append(f"[Assistant]: {content}")
+        else:
+            parts.append(content)
+    return "\n\n".join(parts)
+
+
+def _tls_stream_chat(token: dict, text: str, model_id: str):
+    """用 tls_client 流式聊天，yield (type, data) 元组"""
+    import tls_client
+
+    model_info = GROK_MODEL_MAP.get(model_id, GROK_MODEL_MAP.get("grok-3-fast"))
+    grok_model = model_info["grokModel"]
+    model_mode = model_info["modelMode"]
+
+    payload = {
+        "temporary": True,
+        "modelName": grok_model,
+        "modelMode": model_mode,
+        "message": text,
+        "fileAttachments": [],
+        "imageAttachments": [],
+        "disableSearch": False,
+        "enableImageGeneration": False,
+        "returnImageBytes": False,
+        "returnRawGrokInXaiRequest": False,
+        "enableImageStreaming": False,
+        "imageGenerationCount": 0,
+        "forceConcise": False,
+        "toolOverrides": {},
+        "enableSideBySide": True,
+        "sendFinalMetadata": True,
+        "isReasoning": False,
+        "disableTextFollowUps": False,
+        "disableMemory": True,
+        "forceSideBySide": False,
+        "isAsyncChat": False,
+        "disableSelfHarmShortCircuit": False,
+    }
+
+    session = tls_client.Session(client_identifier=GROK_TLS_CLIENT_ID)
+    headers = _build_grok_headers(token)
+
+    try:
+        resp = session.post(
+            GROK_CHAT_API,
+            headers=headers,
+            json=payload,
+            timeout_seconds=120,
+        )
+    except Exception as exc:
+        yield ("error", f"Network error: {exc}")
+        return
+    finally:
+        session.close()
+
+    if resp.status_code != 200:
+        yield ("error", f"HTTP {resp.status_code}: {(resp.text or '')[:300]}")
+        return
+
+    text_body = resp.text or ""
+    is_thinking = False
+    thinking_finished = False
+    response_id = ""
+
+    for line in text_body.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        r = (data.get("result") or {}).get("response")
+        if not r:
+            continue
+
+        if r.get("responseId") and not response_id:
+            response_id = r["responseId"]
+
+        # modelResponse = 最终响应，结束
+        if r.get("modelResponse"):
+            if is_thinking:
+                yield ("token", "\n</think>\n")
+            break
+
+        # token 流
+        tok = r.get("token")
+        if tok is not None and tok != "":
+            tok = str(tok)
+            current_thinking = bool(r.get("isThinking"))
+
+            if thinking_finished and current_thinking:
+                continue
+
+            content = tok
+            if not is_thinking and current_thinking:
+                content = f"<think>\n{content}"
+            elif is_thinking and not current_thinking:
+                content = f"\n</think>\n{content}"
+                thinking_finished = True
+
+            yield ("token", content)
+            is_thinking = current_thinking
+
+    if is_thinking:
+        yield ("token", "\n</think>\n")
+
+    yield ("done", response_id)
+
+
+# ── Token 远程同步路由 ──
+
+@app.route("/api/import-tokens", methods=["POST"])
+def api_import_tokens():
+    """接收远程推送过来的 tokens 并合并到本地"""
+    body = request.get_json(silent=True) or {}
+    incoming = body.get("tokens", [])
+    if not incoming:
+        return jsonify({"success": False, "error": "No tokens provided"}), 400
+
+    existing = _load_full_tokens()
+    existing_emails = {t.get("email", "").lower() for t in existing if t.get("email")}
+
+    added = 0
+    for t in incoming:
+        email = (t.get("email") or "").lower()
+        if email and email not in existing_emails:
+            existing.append(t)
+            existing_emails.add(email)
+            added += 1
+
+    _save_tokens(existing)
+    return jsonify({"success": True, "added": added, "total": len(existing)})
+
+
+@app.route("/api/sync-tokens-to-remote", methods=["POST"])
+def api_sync_tokens_to_remote():
+    """把本地 tokens 推送到远程服务器"""
+    body = request.get_json(silent=True) or {}
+    remote_url = body.get("remote_url", "").strip().rstrip("/")
+    if not remote_url:
+        return jsonify({"success": False, "error": "remote_url is required"}), 400
+
+    tokens = _load_full_tokens()
+    active_tokens = [t for t in tokens if t.get("status") == "active" and t.get("sso")]
+    if not active_tokens:
+        return jsonify({"success": False, "error": "No active tokens to sync"}), 400
+
+    try:
+        import requests as req_lib
+        resp = req_lib.post(
+            f"{remote_url}/api/import-tokens",
+            json={"tokens": active_tokens},
+            timeout=30,
+        )
+        result = resp.json()
+        return jsonify({"success": True, "remote_response": result, "sent": len(active_tokens)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── API Key 管理路由 ──
+
+@app.route("/api/keys", methods=["GET"])
+def api_keys_list():
+    keys = _load_api_keys()
+    return jsonify({"keys": [
+        {**k, "key_preview": k.get("key", "")[:8] + "..."} for k in keys
+    ], "total": len(keys), "enabled": sum(1 for k in keys if k.get("enabled", True))})
+
+
+@app.route("/api/keys", methods=["POST"])
+def api_keys_create():
+    body = request.get_json(silent=True) or {}
+    name = str(body.get("name", "")).strip() or "default"
+    new_key = {
+        "id": uuid.uuid4().hex[:16],
+        "key": f"sk-{uuid.uuid4().hex}",
+        "name": name,
+        "enabled": True,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "usage_count": 0,
+    }
+    keys = _load_api_keys()
+    keys.append(new_key)
+    _save_api_keys(keys)
+    return jsonify({"success": True, "key": new_key})
+
+
+@app.route("/api/keys/<key_id>", methods=["DELETE"])
+def api_keys_delete(key_id):
+    keys = _load_api_keys()
+    new_keys = [k for k in keys if k.get("id") != key_id]
+    if len(new_keys) == len(keys):
+        return jsonify({"success": False, "error": "Not found"}), 404
+    _save_api_keys(new_keys)
+    return jsonify({"success": True})
+
+
+@app.route("/api/keys/<key_id>", methods=["PATCH"])
+def api_keys_toggle(key_id):
+    body = request.get_json(silent=True) or {}
+    keys = _load_api_keys()
+    for k in keys:
+        if k.get("id") == key_id:
+            if "enabled" in body:
+                k["enabled"] = bool(body["enabled"])
+            _save_api_keys(keys)
+            return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Not found"}), 404
+
+
+# ── OpenAI 兼容路由 ──
+
+@app.route("/v1/chat/completions", methods=["POST"])
+def openai_chat_completions():
+    """OpenAI 兼容聊天接口"""
+    # Bearer Token 认证
+    key_info = _validate_bearer(request)
+    if not key_info:
+        return _openai_error("Invalid API key", 401, "invalid_api_key")
+
+    body = request.get_json(silent=True) or {}
+    model = str(body.get("model", "grok-3-fast"))
+    messages = body.get("messages", [])
+    stream = bool(body.get("stream", False))
+
+    if not messages:
+        return _openai_error("messages is required", 400)
+
+    text = _extract_openai_messages(messages)
+    if not text.strip():
+        return _openai_error("Empty message", 400)
+
+    # 加载 tokens 进行轮换
+    try:
+        tokens = _load_full_tokens()
+    except Exception:
+        return _openai_error("Failed to load tokens", 500)
+
+    candidates = [t for t in tokens if t.get("status") == "active" and t.get("sso")]
+    if not candidates:
+        return _openai_error("No available tokens", 503)
+
+    random.shuffle(candidates)
+    resp_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+
+    # ── Image 模型：走生图逻辑 ──
+    model_cfg = GROK_MODEL_MAP.get(model, {})
+    if model_cfg.get("type") == "image":
+        aspect_ratio = model_cfg.get("ratio", "1:1")
+        base_url = request.host_url.rstrip("/")  # e.g. http://70.39.195.121:8086
+        img_content = ""
+        for token in candidates:
+            result = _tls_generate_images(token, text, 4, aspect_ratio, False)
+            if result.get("images"):
+                for i, img in enumerate(result["images"]):
+                    # 用代理 URL 让客户端能直接显示图片
+                    proxy_url = img.get("url") or img.get("image_url", "")
+                    if proxy_url.startswith("/"):
+                        proxy_url = f"{base_url}{proxy_url}"
+                    img_content += f"![image-{i+1}]({proxy_url})\n\n"
+                break
+            err = result.get("error", "")
+            if "rate" in err.lower() or "429" in err:
+                _block_local_token(token.get("id", ""))
+                continue
+            img_content = f"生图失败: {err}"
+            break
+        if not img_content:
+            img_content = "所有 token 速率限制，请稍后再试"
+
+        # 更新 usage
+        keys = _load_api_keys()
+        for k in keys:
+            if k.get("id") == key_info.get("id"):
+                k["usage_count"] = k.get("usage_count", 0) + 1
+                break
+        _save_api_keys(keys)
+
+        if stream:
+            def img_stream():
+                yield _openai_sse_chunk(resp_id, model, "", "assistant", None)
+                yield _openai_sse_chunk(resp_id, model, img_content)
+                yield _openai_sse_chunk(resp_id, model, "", None, "stop")
+                yield "data: [DONE]\n\n"
+            return Response(img_stream(), mimetype="text/event-stream", headers={
+                "Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+        return jsonify({
+            "id": resp_id, "object": "chat.completion", "created": int(time.time()), "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": img_content}, "logprobs": None, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        })
+
+    if stream:
+        def generate_stream():
+            yield _openai_sse_chunk(resp_id, model, "", "assistant", None)
+            success = False
+
+            for token in candidates:
+                for event_type, event_data in _tls_stream_chat(token, text, model):
+                    if event_type == "token":
+                        yield _openai_sse_chunk(resp_id, model, event_data)
+                    elif event_type == "done":
+                        success = True
+                        break
+                    elif event_type == "error":
+                        err_lower = event_data.lower()
+                        if "429" in err_lower or "rate" in err_lower:
+                            _block_local_token(token.get("id", ""))
+                            break
+                        yield _openai_sse_chunk(resp_id, model, f"[Error: {event_data}]")
+                        break
+                if success:
+                    break
+
+            if not success and not any("Error" in "" for _ in []):
+                yield _openai_sse_chunk(resp_id, model, "[Error: All tokens exhausted]")
+
+            yield _openai_sse_chunk(resp_id, model, "", None, "stop")
+            yield "data: [DONE]\n\n"
+
+            # 更新 usage
+            keys = _load_api_keys()
+            for k in keys:
+                if k.get("id") == key_info.get("id"):
+                    k["usage_count"] = k.get("usage_count", 0) + 1
+                    break
+            _save_api_keys(keys)
+
+        return Response(generate_stream(), mimetype="text/event-stream", headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        })
+
+    # 非流式
+    full_content = ""
+    success = False
+
+    for token in candidates:
+        for event_type, event_data in _tls_stream_chat(token, text, model):
+            if event_type == "token":
+                full_content += event_data
+            elif event_type == "done":
+                success = True
+                break
+            elif event_type == "error":
+                err_lower = event_data.lower()
+                if "429" in err_lower or "rate" in err_lower:
+                    _block_local_token(token.get("id", ""))
+                    full_content = ""
+                    break
+                return _openai_error(event_data, 500)
+        if success:
+            break
+
+    if not success:
+        return _openai_error("All tokens rate limited", 429, "rate_limit_exceeded")
+
+    # 更新 usage
+    keys = _load_api_keys()
+    for k in keys:
+        if k.get("id") == key_info.get("id"):
+            k["usage_count"] = k.get("usage_count", 0) + 1
+            break
+    _save_api_keys(keys)
+
+    return jsonify({
+        "id": resp_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": full_content}, "logprobs": None, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    })
+
+
+@app.route("/v1/models", methods=["GET"])
+def openai_list_models():
+    """OpenAI 兼容模型列表"""
+    models = []
+    for mid in GROK_MODEL_MAP:
+        models.append({"id": mid, "object": "model", "created": 1700000000, "owned_by": "xai"})
+    return jsonify({"object": "list", "data": models})
+
+
+@app.route("/api/image-proxy")
+def proxy_grok_image():
+    """代理 assets.grok.com 图片下载（用生成该图的 token 的 cookie）"""
+    import tls_client
+    target_url = request.args.get("url", "").strip()
+    token_id = request.args.get("tid", "").strip()
+    if not target_url or not target_url.startswith("https://assets.grok.com/"):
+        return jsonify({"error": "Invalid or missing URL"}), 400
+
+    try:
+        tokens = _load_full_tokens()
+        # 优先找指定 token，找不到则降级用第一个活跃 token
+        token = None
+        if token_id:
+            token = next((t for t in tokens if t.get("id") == token_id and t.get("sso")), None)
+        if not token:
+            active = [t for t in tokens if t.get("status") == "active" and t.get("sso")]
+            token = active[0] if active else None
+        if not token:
+            return jsonify({"error": "No available tokens"}), 500
+
+        # 用 requests 下载图片（tls_client 对二进制有 UTF-8 编码损坏）
+        img_resp = requests.get(
+            target_url,
+            headers={
+                "Accept": "image/*,*/*;q=0.8",
+                "Cookie": _build_grok_cookie(token),
+                "Referer": "https://grok.com/",
+                "User-Agent": GROK_USER_AGENT,
+            },
+            timeout=60,
+        )
+
+        if img_resp.status_code != 200:
+            return jsonify({"error": f"Upstream {img_resp.status_code}"}), img_resp.status_code
+
+        content_type = img_resp.headers.get("content-type", "image/jpeg")
+        return Response(img_resp.content, mimetype=content_type, headers={
+            "Cache-Control": "public, max-age=86400",
+            "Access-Control-Allow-Origin": "*",
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/imagine", methods=["POST"])
