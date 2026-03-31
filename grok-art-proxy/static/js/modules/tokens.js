@@ -2,12 +2,14 @@
 // Token 管理模块
 // ═══════════════════════════════════════════════════════════════
 
-import { workersApi, log, clearLog, downloadJSON, copyToClipboard, bus } from './utils.js';
+import { workersApi, api, log, clearLog, downloadJSON, copyToClipboard, bus } from './utils.js';
 
 const PAGE_SIZE = 50;
+const FLASK_BASE = 'http://localhost:8086';
 let allTokens = [];
 let currentPage = 1;
 const diagnosisResults = new Map();
+const selectedTokenIds = new Set();
 
 const DIAGNOSIS_LABELS = {
   ok: '可用',
@@ -166,17 +168,22 @@ function renderTokenList() {
 
   if (pageTokens.length === 0) {
     list.innerHTML = '<div class="empty-state">暂无令牌，请先导入</div>';
+    updateBatchUI();
     return;
   }
 
   list.innerHTML = pageTokens.map(t => `
     <div class="token-item">
-      <div class="token-info">
+      <label class="token-checkbox">
+        <input type="checkbox" data-token-id="${t.id}" ${selectedTokenIds.has(t.id) ? 'checked' : ''}
+          onchange="window.toggleTokenSelect('${t.id}', this.checked)" />
+      </label>
+      <div class="token-info" style="flex:1">
         <div class="token-name">
           ${t.name}
           ${t.nsfw_enabled ? '<span class="status-badge" style="background:rgba(212,168,75,0.15);color:var(--gold-deep);border-color:var(--gold-bright);">NSFW</span>' : ''}
         </div>
-        <div class="token-meta">使用次数: ${t.use_count || 0}</div>
+        <div class="token-meta">使用次数: ${t.use_count || 0} · SSO_RW: ${t.has_sso_rw ? '✓' : '✗'} · UserID: ${t.has_user_id ? '✓' : '✗'}</div>
         ${renderDiagnosisBlock(t.id)}
       </div>
       <div class="token-actions">
@@ -187,7 +194,64 @@ function renderTokenList() {
       </div>
     </div>
   `).join('');
+
+  updateBatchUI();
 }
+
+function updateBatchUI() {
+  const countEl = document.getElementById('batch-selected-count');
+  const batchBtn = document.getElementById('btn-batch-delete');
+  if (countEl) countEl.textContent = `已选 ${selectedTokenIds.size} 个`;
+  if (batchBtn) batchBtn.disabled = selectedTokenIds.size === 0;
+}
+
+window.toggleTokenSelect = (id, checked) => {
+  if (checked) selectedTokenIds.add(id);
+  else selectedTokenIds.delete(id);
+  updateBatchUI();
+};
+
+window.toggleSelectAll = (checked) => {
+  if (checked) {
+    allTokens.forEach(t => selectedTokenIds.add(t.id));
+  } else {
+    selectedTokenIds.clear();
+  }
+  renderTokenList();
+};
+
+window.batchDeleteTokens = async () => {
+  if (selectedTokenIds.size === 0) return;
+  if (!confirm(`确定删除选中的 ${selectedTokenIds.size} 个令牌？\n同时会删除对应的本地账号文件，此操作不可撤销！`)) return;
+
+  const btn = document.getElementById('btn-batch-delete');
+  btn.disabled = true;
+  btn.textContent = '删除中...';
+
+  try {
+    // 1. 从 Worker D1 数据库批量删除
+    const ids = Array.from(selectedTokenIds);
+    const res = await workersApi('/api/tokens/batch-delete', 'POST', { ids });
+
+    // 2. 同时删除本地账号文件（通过 Flask）
+    if (res.deleted_names && res.deleted_names.length > 0) {
+      try {
+        await api(FLASK_BASE + '/api/batch-delete-tokens', 'POST', { names: res.deleted_names });
+      } catch (e) {
+        console.warn('删除本地文件失败（Flask 未启动？）:', e.message);
+      }
+    }
+
+    selectedTokenIds.clear();
+    alert(`成功删除 ${res.deleted} 个令牌`);
+    await loadTokens();
+  } catch (e) {
+    alert('批量删除失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🗑️ 批量删除';
+  }
+};
 
 function renderPagination() {
   const container = document.getElementById('token-pagination');

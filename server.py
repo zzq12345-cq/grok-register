@@ -49,6 +49,29 @@ import asyncio
 
 app = Flask(__name__)
 
+# CORS 支持：允许 Worker (8787) 跨域访问 Flask API
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin', '')
+    if origin and ('localhost' in origin or '127.0.0.1' in origin):
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
+
+@app.before_request
+def handle_preflight():
+    if request.method == 'OPTIONS':
+        response = app.make_default_options_response()
+        origin = request.headers.get('Origin', '')
+        if origin and ('localhost' in origin or '127.0.0.1' in origin):
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+
 # ══════════════════════════════════════════════════════════════
 #  全局状态
 # ══════════════════════════════════════════════════════════════
@@ -411,6 +434,38 @@ def api_import_last():
             return jsonify({"success": False, "error": f"导入失败: {import_resp.text}"}), 500
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/batch-delete-tokens", methods=["POST"])
+def api_batch_delete_tokens():
+    """批量删除 token 并同时删除本地文件"""
+    data = request.get_json() or {}
+    names = data.get("names", [])  # token 名称列表（即邮箱地址）
+
+    if not names:
+        return jsonify({"success": False, "error": "未指定要删除的 token"}), 400
+
+    deleted_files = []
+    failed_files = []
+
+    for name in names:
+        # 删除本地账号文件
+        file_path = os.path.join(GROK_DIR, f"{name}.json")
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                deleted_files.append(name)
+            except Exception as e:
+                failed_files.append({"name": name, "error": str(e)})
+        else:
+            deleted_files.append(name)  # 文件不存在也算成功
+
+    return jsonify({
+        "success": True,
+        "deleted_files": len(deleted_files),
+        "failed_files": len(failed_files),
+        "details": {"deleted": deleted_files, "failed": failed_files},
+    })
 
 
 @app.route("/api/results")
@@ -1682,6 +1737,200 @@ def proxy_tokens_export():
     session, cookies = get_workers_client()
     resp = session.get(f"{WORKERS_URL}/api/tokens/export", cookies=cookies)
     return Response(resp.content, status=resp.status_code)
+
+@app.route("/api/fetch-cf-clearance", methods=["POST"])
+def fetch_cf_clearance():
+    """通过真实 Chrome 浏览器逐个 Token 获取 cf_clearance cookie 并更新到 Workers"""
+    from grok_register_mac import _find_chrome, _start_chrome, _kill_port
+
+    # 从 Workers 获取 token 完整数据
+    session, cookies = get_workers_client()
+    try:
+        info_resp = session.get(f"{WORKERS_URL}/api/tokens", cookies=cookies, timeout=10)
+        export_resp = session.get(f"{WORKERS_URL}/api/tokens/export", cookies=cookies, timeout=10)
+        if info_resp.status_code != 200 or export_resp.status_code != 200:
+            return jsonify({"success": False, "error": "获取 token 列表失败"}), 500
+        token_infos = info_resp.json().get("tokens", [])
+        token_exports = export_resp.json().get("tokens", [])
+    except Exception as e:
+        return jsonify({"success": False, "error": f"获取 token 失败: {e}"}), 500
+
+    # 合并 info + export，过滤活跃且有 SSO 的 token
+    merged = _merge_token_rows(token_infos, token_exports)
+    active_tokens = [t for t in merged if t.get("status") == "active" and t.get("sso")]
+    if not active_tokens:
+        return jsonify({"success": False, "error": "没有可用的活跃令牌"}), 400
+
+    total = len(active_tokens)
+
+    async def _batch_fetch_cf():
+        from playwright.async_api import async_playwright
+
+        CDP_PORT = 9323
+        user_data_dir = os.path.abspath("/tmp/ChromeDevData/CF_batch")
+        chrome_proc = None
+        pw_instance = None
+        browser_inst = None
+
+        results = []
+        success_count = 0
+        fail_count = 0
+
+        try:
+            chrome_proc = _start_chrome(CDP_PORT, user_data_dir, headless=False)
+            if not chrome_proc:
+                return [{"name": "系统", "success": False, "message": "Chrome 启动失败"}], 0, total
+
+            import time as _time
+            _time.sleep(2)
+
+            # 最小化 Chrome 窗口
+            _minimize_chrome_window()
+
+            pw_instance = await async_playwright().start()
+            browser_inst = await pw_instance.chromium.connect_over_cdp(
+                f"http://localhost:{CDP_PORT}", timeout=15000
+            )
+
+            for idx, token in enumerate(active_tokens):
+                sso = token.get("sso", "")
+                sso_rw = token.get("sso_rw", "")
+                name = token.get("name", sso[:8] + "...")
+                token_id = token.get("id", "")
+
+                if not sso:
+                    results.append({"name": name, "success": False, "message": "无 SSO"})
+                    fail_count += 1
+                    continue
+
+                ctx = None
+                page = None
+                try:
+                    ctx = await browser_inst.new_context()
+                    # 注入 SSO cookie
+                    cookie_list = [
+                        {"name": "sso", "value": sso, "domain": ".grok.com", "path": "/"},
+                    ]
+                    if sso_rw:
+                        cookie_list.append({"name": "sso-rw", "value": sso_rw, "domain": ".grok.com", "path": "/"})
+                    await ctx.add_cookies(cookie_list)
+
+                    page = await ctx.new_page()
+                    try:
+                        await page.goto("https://grok.com/", wait_until="domcontentloaded", timeout=30000)
+                    except Exception:
+                        pass
+
+                    # 等待 Cloudflare challenge 通过（最多 35 秒）
+                    await asyncio.sleep(5)
+                    ready = False
+                    for wait_round in range(10):
+                        ready, detail = await _inspect_page_access(page)
+                        if ready:
+                            break
+                        await asyncio.sleep(3)
+
+                    if not ready:
+                        results.append({"name": name, "success": False, "message": "Cloudflare 验证未通过"})
+                        fail_count += 1
+                        continue
+
+                    # 等待 cf_clearance cookie 出现（最多 10 秒）
+                    cf_value = ""
+                    for _ in range(10):
+                        try:
+                            page_cookies = await ctx.cookies("https://grok.com/")
+                            for cookie in page_cookies:
+                                if cookie.get("name") == "cf_clearance":
+                                    v = str(cookie.get("value", ""))
+                                    if _is_cookie_value_safe(v):
+                                        cf_value = v
+                                        break
+                            if cf_value:
+                                break
+                        except Exception:
+                            pass
+                        await asyncio.sleep(1)
+
+                    if not cf_value:
+                        results.append({"name": name, "success": False, "message": "未获取到 cf_clearance"})
+                        fail_count += 1
+                        continue
+
+                    # 通过 Workers import API 更新 cf_clearance
+                    try:
+                        import_data = [{"sso": sso, "sso_rw": sso_rw, "cf_clearance": cf_value, "name": name}]
+                        import_resp = session.post(
+                            f"{WORKERS_URL}/api/tokens/import",
+                            json={"text": json.dumps(import_data)},
+                            headers={"Content-Type": "application/json"},
+                            cookies=cookies,
+                            timeout=10,
+                        )
+                        if import_resp.status_code == 200:
+                            results.append({"name": name, "success": True, "message": f"cf_clearance 已更新"})
+                            success_count += 1
+                        else:
+                            results.append({"name": name, "success": False, "message": f"Workers 更新失败: {import_resp.status_code}"})
+                            fail_count += 1
+                    except Exception as e:
+                        results.append({"name": name, "success": False, "message": f"Workers 更新异常: {str(e)[:80]}"})
+                        fail_count += 1
+
+                except Exception as e:
+                    results.append({"name": name, "success": False, "message": str(e)[:100]})
+                    fail_count += 1
+                finally:
+                    if ctx:
+                        try:
+                            await ctx.close()
+                        except Exception:
+                            pass
+
+        except Exception as e:
+            if not results:
+                results.append({"name": "系统", "success": False, "message": str(e)[:100]})
+                fail_count = total
+        finally:
+            if browser_inst:
+                try:
+                    await browser_inst.close()
+                except Exception:
+                    pass
+            if pw_instance:
+                try:
+                    await pw_instance.stop()
+                except Exception:
+                    pass
+            if chrome_proc:
+                try:
+                    chrome_proc.terminate()
+                    chrome_proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        chrome_proc.kill()
+                    except Exception:
+                        pass
+            _kill_port(CDP_PORT)
+            try:
+                if os.path.exists(user_data_dir):
+                    shutil.rmtree(user_data_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+        return results, success_count, fail_count
+
+    results, success_count, fail_count = asyncio.run(_batch_fetch_cf())
+
+    return jsonify({
+        "success": True,
+        "results": results,
+        "success_count": success_count,
+        "fail_count": fail_count,
+        "total": total,
+        "done": True,
+    })
+
 
 @app.route("/api/tokens/enable-nsfw", methods=["POST"])
 def local_tokens_nsfw():

@@ -247,6 +247,37 @@ app.delete("/api/tokens/:id", async (c) => {
   return c.json({ success: true, total: stats.total });
 });
 
+// Batch delete tokens
+app.post("/api/tokens/batch-delete", async (c) => {
+  const body = await c.req.json<{ ids: string[] }>();
+  const { ids } = body;
+
+  if (!ids || ids.length === 0) {
+    return c.json({ success: false, error: "No token IDs provided" }, 400);
+  }
+
+  // Collect names before deleting (for local file cleanup)
+  const deletedNames: string[] = [];
+  let deletedCount = 0;
+
+  for (const id of ids) {
+    const token = await getToken(c.env.DB, id);
+    if (token) {
+      deletedNames.push(token.name);
+      const ok = await deleteToken(c.env.DB, id);
+      if (ok) deletedCount++;
+    }
+  }
+
+  const stats = await getTokenStats(c.env.DB);
+  return c.json({
+    success: true,
+    deleted: deletedCount,
+    deleted_names: deletedNames,
+    total: stats.total,
+  });
+});
+
 // Clear all tokens
 app.delete("/api/tokens", async (c) => {
   await clearAllTokens(c.env.DB);

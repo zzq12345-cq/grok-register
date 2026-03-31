@@ -4,6 +4,13 @@
 
 import { api, clearLog } from './utils.js';
 
+// 注册相关 API 在 Flask 服务器上 (8086)，不在 Worker (8787) 上
+const FLASK_BASE = 'http://localhost:8086';
+
+async function flaskApi(path, method = 'GET', body = null) {
+  return api(FLASK_BASE + path, method, body);
+}
+
 let running = false;
 
 const TOTAL_STEPS = 8;
@@ -45,7 +52,7 @@ export async function initRegister() {
 }
 
 function connectSSE() {
-  const eventSource = new EventSource('/api/stream');
+  const eventSource = new EventSource(FLASK_BASE + '/api/stream');
 
   eventSource.onmessage = (event) => {
     try {
@@ -98,7 +105,7 @@ async function startRegister() {
   const domain = document.getElementById('emailDomain').value;
 
   try {
-    const res = await api('/api/start', 'POST', {
+    const res = await flaskApi('/api/start', 'POST', {
       threads: threadCount,
       count: taskCount,
       headless,
@@ -119,7 +126,7 @@ async function startRegister() {
 
 async function stopRegister() {
   try {
-    await api('/api/stop', 'POST');
+    await flaskApi('/api/stop', 'POST');
   } catch (e) {
     alert('停止失败: ' + e.message);
   }
@@ -414,7 +421,7 @@ function addResult(data) {
 // 一键导入最新注册结果到灵牌名录
 async function importLastResult() {
   try {
-    const res = await api('/api/import-last', 'POST');
+    const res = await flaskApi('/api/import-last', 'POST');
     if (res.success) {
     alert('导入成功! 已添加 ' + res.imported + ' 个账号到灵牌名录');
   } else {
@@ -435,7 +442,7 @@ function initStats() {
 // 加载可用邮箱域名
 async function loadDomains() {
   try {
-    const res = await api('/api/domains');
+    const res = await flaskApi('/api/domains');
     const select = document.getElementById('emailDomain');
     if (res.domains && res.domains.length > 0) {
       for (const domain of res.domains) {

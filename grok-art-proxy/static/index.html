@@ -105,7 +105,7 @@
                     <div class="form-group">
                         <label>邮箱域名</label>
                         <select id="emailDomain">
-                            <option value="">随机选择</option>
+                            <option value="zqsdify.site" selected>zqsdify.site</option>
                         </select>
                     </div>
                 </div>
@@ -210,7 +210,17 @@
 
             <!-- 令牌列表 -->
             <div class="section">
-                <h2>灵牌名录</h2>
+                <div class="section-header">
+                    <h2>灵牌名录</h2>
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:13px; color:var(--text-muted);">
+                            <input type="checkbox" id="select-all-tokens" onchange="window.toggleSelectAll(this.checked)" />
+                            全选
+                        </label>
+                        <span id="batch-selected-count" style="font-size:13px; color:var(--text-muted);">已选 0 个</span>
+                        <button class="btn btn-sm btn-danger" id="btn-batch-delete" disabled onclick="window.batchDeleteTokens()">🗑️ 批量删除</button>
+                    </div>
+                </div>
                 <div id="token-list" class="token-list">
                     <div class="empty-state">暂无令牌，请先导入</div>
                 </div>
@@ -488,9 +498,8 @@ Content-Type: application/json
         <span>仙侠绘卷 · Grok 统一面板 · 白色仙侠风</span>
     </footer>
 
-    <!-- Workers URL 配置 (由 Flask 注入) -->
     <script>
-        window.WORKERS_URL = "{{ workers_url }}";
+        window.WORKERS_URL = "";
     </script>
 
     <!-- 主应用脚本 -->

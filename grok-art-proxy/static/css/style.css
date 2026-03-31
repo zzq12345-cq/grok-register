@@ -729,6 +729,20 @@ input[type="range"]::-webkit-slider-thumb:hover {
   background: var(--bg-white);
 }
 
+.token-checkbox {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.token-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--gold-bright);
+}
+
 .token-info { flex: 1; }
 
 .token-actions {

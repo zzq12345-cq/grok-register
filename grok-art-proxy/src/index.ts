@@ -81,9 +81,9 @@ function isLoginPagePath(pathname: string): boolean {
     pathname === "/api/auth/login" ||
     pathname === "/api/auth/logout" ||
     pathname === "/api/auth/status" ||
-    pathname === "/css/style.css" ||
-    pathname === "/css/login.css" ||
-    pathname === "/js/login.js" ||
+    pathname.startsWith("/css/") ||
+    pathname.startsWith("/js/") ||
+    pathname.startsWith("/static/") ||
     pathname === "/health"
   );
 }

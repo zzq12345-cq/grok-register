@@ -105,7 +105,7 @@
                     <div class="form-group">
                         <label>邮箱域名</label>
                         <select id="emailDomain">
-                            <option value="">随机选择</option>
+                            <option value="zqsdify.site" selected>zqsdify.site</option>
                         </select>
                     </div>
                 </div>
@@ -488,9 +488,8 @@ Content-Type: application/json
         <span>仙侠绘卷 · Grok 统一面板 · 白色仙侠风</span>
     </footer>
 
-    <!-- Workers URL 配置 (由 Flask 注入) -->
     <script>
-        window.WORKERS_URL = "{{ workers_url }}";
+        window.WORKERS_URL = "";
     </script>
 
     <!-- 主应用脚本 -->
